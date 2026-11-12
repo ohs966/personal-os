@@ -15,7 +15,7 @@ Everything runs on Cloudflare's free plan, so it works with the laptop off. Noth
 | `server/shims/` | D1 store and browser-only fallbacks used by the shared brain |
 | `migrations/` | D1 (SQLite) schema |
 | `build.mjs` | esbuild: bundles `docs/core.js` + `server/*` into `dist/worker.js` |
-| `.github/workflows/deploy.yml` | On every push to `main`: test, build, create the D1 database if needed, migrate, deploy |
+| `.github/workflows/test.yml` | Mock tests on every push. Cloudflare Workers Builds deploys `main` itself (build `node build.mjs`, deploy `npx wrangler deploy`) |
 
 ## Data
 
@@ -25,7 +25,6 @@ Everything runs on Cloudflare's free plan, so it works with the laptop off. Noth
 
 ## Secrets (added by Omar in dashboards, never in code or chat)
 
-- GitHub, repo Settings, Secrets and variables, Actions: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
 - Cloudflare, Workers and Pages, personal-os, Settings, Variables and Secrets: `TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, optional `TELEGRAM_CLAUDE_MODEL` (default `claude-haiku-5-5`)
 
 ## Telegram

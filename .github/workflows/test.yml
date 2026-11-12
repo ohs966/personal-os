@@ -1,0 +1,19 @@
+name: Test
+
+# Cloudflare Workers Builds deploys on every push to main. This only runs the mock tests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-save esbuild@0.25
+      - run: NO_SEED=1 node test/worker.test.mjs

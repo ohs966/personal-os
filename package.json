@@ -1,0 +1,13 @@
+{
+  "name": "personal-os",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs && NO_SEED=1 node test/worker.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "wrangler": "^4.0.0"
+  }
+}
