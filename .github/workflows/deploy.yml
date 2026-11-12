@@ -1,0 +1,54 @@
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install build tools
+        run: npm install --no-save esbuild@0.25 wrangler@4
+
+      - name: Check the secrets are set
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub, Settings, Secrets and variables, Actions."
+            exit 1
+          fi
+
+      - name: Run the mock tests
+        run: NO_SEED=1 node test/worker.test.mjs
+
+      - name: Build the Worker (esbuild)
+        run: node build.mjs
+
+      - name: Create the D1 database if needed
+        run: |
+          ID=$(npx wrangler d1 list --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const l=JSON.parse(s);const d=l.find(x=>x.name==="personal-os-db");process.stdout.write(d?(d.uuid||d.database_id||""):"")})')
+          if [ -z "$ID" ]; then
+            npx wrangler d1 create personal-os-db --location=eeur
+            ID=$(npx wrangler d1 list --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const l=JSON.parse(s);const d=l.find(x=>x.name==="personal-os-db");process.stdout.write(d?(d.uuid||d.database_id||""):"")})')
+          fi
+          echo "D1 database: $ID"
+          sed -i "s/__D1_DATABASE_ID__/$ID/" wrangler.toml
+
+      - name: Apply database migrations
+        run: npx wrangler d1 migrations apply personal-os-db --remote
+
+      - name: Deploy
+        run: npx wrangler deploy

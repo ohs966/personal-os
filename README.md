@@ -1,39 +1,44 @@
 # Personal OS
 
-Omar's Personal Development OS: daily tasks, life goals and plans, businesses (payouts, clients and products, milestones, maintenance), personal money, insights, and an assistant you can also text on Telegram.
-
-Everything here belongs to this OS only: its own Supabase project, its own tables, its own Edge Functions and its own Telegram bot.
+Omar's Personal Development OS: the web app, its own backend, and its own Telegram assistant.
+Everything runs on Cloudflare's free plan, so it works with the laptop off. Nothing is shared with any other system.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `docs/index.html`, `docs/app.js` | The web app (served by GitHub Pages). |
-| `docs/core.js` | Shared logic and the assistant's brain: data helpers, the snapshot, the system prompt, the free built-in commands and the confirmable actions. Used by the web app **and** bundled into the Edge Functions. |
-| `docs/supa.js` | The app's data layer on Supabase (`os_docs` table, live updates). |
-| `docs/config.js` | The project URL and publishable key (safe to be public; RLS protects the data). |
-| `server/telegram.ts` | Telegram webhook: pairing, text and voice in, confirm/cancel, chat memory. |
-| `server/assistant.ts` | The in-app endpoint the web assistant calls when the free brain doesn't understand. |
-| `server/brain.ts` | Server half of the brain: Claude Haiku call with a cached system prompt, read round, spend log. |
-| `server/shims/` | Server versions of browser-only parts (service-role Supabase client, "do this inside the OS"). |
-| `supabase/functions/*/index.ts` | **Generated** by `node build.mjs` (esbuild). Don't edit by hand. |
-| `supabase/migrations/` | Database: `os_docs`, `os_config`, `telegram_links`, `telegram_pairing`, `telegram_state`, `ai_spend`, the pairing RPC, the single-owner lock. |
-| `test/` | Mock tests: `node test/core.test.mjs`, `node test/telegram.test.mjs`, `node test/web.test.mjs`. |
+| `docs/` | The web app (static files): `index.html`, `app.js`, `cfdb.js` (data layer), `core.js` (shared brain) |
+| `server/worker.ts` | The Cloudflare Worker: serves `docs/`, the API at `/api/*` and the Telegram webhook at `/telegram` |
+| `server/api.ts` | Owner sign-in, data sync, in-app assistant, Telegram card endpoints |
+| `server/telegram.ts` | Telegram bot: text and voice, confirm or cancel changes, pairing |
+| `server/brain.ts` | Free brain first, then Claude Haiku; every Claude call is logged to `ai_spend` |
+| `server/shims/` | D1 store and browser-only fallbacks used by the shared brain |
+| `migrations/` | D1 (SQLite) schema |
+| `build.mjs` | esbuild: bundles `docs/core.js` + `server/*` into `dist/worker.js` |
+| `.github/workflows/deploy.yml` | On every push to `main`: test, build, create the D1 database if needed, migrate, deploy |
 
-## How the assistant thinks
+## Data
 
-1. **Free built-in brain** (`freeBrain` in `core.js`): everyday commands, instant, no AI, no cost.
-2. **Claude Haiku** for everything else: one JSON plan `{ reply, read, actions }`. Reads run automatically; actions are shown with Confirm / Cancel before anything is saved.
+- `os_docs` holds every record as `{coll, id, data}`. `os_deleted` remembers deletions so other devices catch them.
+- The app loads everything once, then asks `/api/changes` every 4 seconds while the tab is open, so changes made from Telegram show up on their own.
+- Only one owner account can exist. Passwords are hashed with PBKDF2; sessions are HttpOnly cookies; every write needs the `X-POS: 1` header. 8 wrong passwords lock sign-in for 15 minutes.
 
-## Secrets (Supabase dashboard, Edge Functions, Secrets)
+## Secrets (added by Omar in dashboards, never in code or chat)
 
-- `TELEGRAM_BOT_TOKEN`: from @BotFather, a bot just for this OS
-- `ANTHROPIC_API_KEY`: the Claude key
-- `GEMINI_API_KEY`: for voice notes
-- `TELEGRAM_CLAUDE_MODEL` (optional): defaults to `claude-haiku-5-5`
+- GitHub, repo Settings, Secrets and variables, Actions: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
+- Cloudflare, Workers and Pages, personal-os, Settings, Variables and Secrets: `TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, optional `TELEGRAM_CLAUDE_MODEL` (default `claude-haiku-5-5`)
 
-## Rebuild the functions
+## Telegram
+
+1. Create the bot with @BotFather and add `TELEGRAM_BOT_TOKEN` in Cloudflare.
+2. Open `https://<worker>/telegram?setup=1` once. It registers the webhook (with a secret header derived from the token) and saves the bot's @username.
+3. In the OS: Assistant, Settings, Connect Telegram. That makes a 6-digit code valid for 15 minutes and opens `t.me/<bot>?start=<code>`.
+
+Reads run at once. Changes come back with Confirm / Cancel buttons ("تمام" / "لا" also work). `/new` starts fresh. Voice notes are transcribed by Gemini.
+
+## Tests
 
 ```
 node build.mjs
+NO_SEED=1 node test/worker.test.mjs   # mock D1 (node:sqlite), Telegram, Gemini and Claude
 ```

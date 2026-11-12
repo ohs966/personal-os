@@ -1,13 +1,10 @@
-// Personal OS web app. Data lives in this OS's own Supabase project; the assistant's brain is shared
-// with the Telegram bot through core.js.
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/+esm";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
-import { supaDb, downloader } from "./supa.js";
+// Personal OS web app. Data lives in this OS's own Cloudflare backend (Worker + D1); the assistant's brain
+// is shared with the Telegram bot through core.js.
+import { api, cfDb, downloader } from "./cfdb.js";
 import {
   AIS, AI_DATE, BRAIN, CANCEL_RE, CLOCK, CONFIRM_RE, DAY, DOWS, FREQ, GENERIC, HELP, KEYOF, KINDS, LISTS, MKINDS, MON, PRI, RUN, S, SECTION_OF_COLL, addInterval, aiDefaults, aiDesc, aiResolve, aiRow, aiRules, aiSnapshot, amountOf, balanceAt, bestTask, bizClass, bizIndex, bizInfo, bizStats, bizText, brainSnapshot, brainSystem, briefText, budgets, days, dueSoon, esc, extraLabel, fdate, findIn, fmtDay, freeBrain, goalInfo, guessCat, isArabic, iso, lcDate, linkInfo, loadDocs, localAnswer, mLabel, mShift, maintInfo, money, moneyStats, moneyText, monthMoney, monthsBetween, msOf, noDash, nowHour, num, opening, opt, overdueText, parse, parsePlan, pct, planInfo, prepareActions, readData, recommendations, reportText, runOps, settingsOp, signals, sortBiz, stripTags, sumK, taskStats, tickTask, toTelegramHtml, today, valueClass, words
 } from "./core.js";
 
-const SB = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, storageKey: "personal-os-auth" } });
 // ---------------- state ----------------
 let tab = "goals", bizTab = "overview", bizSel = "", payLimit = 40;
 
@@ -528,8 +525,12 @@ async function doRestore() {
   if (!restoreData || restoreData.busy) return; const j = restoreData.j; restoreData.busy = true; render();
   let n = 0;
   const ok = await write(async () => {
-    for (const [c] of COLLS) for (const [id, d] of Object.entries(j.collections[c] || {})) { await S.db.collection(c).doc(id).set(d); n++; }
-    if (j.options && typeof j.options === "object") await S.db.doc("app/options").set({ ...j.options });
+    const rows = [];
+    for (const [c] of COLLS) for (const [id, d] of Object.entries(j.collections[c] || {})) rows.push({ coll: c, id, data: d });
+    if (j.options && typeof j.options === "object") rows.push({ coll: "app", id: "options", data: { ...j.options } });
+    n = rows.length - (j.options && typeof j.options === "object" ? 1 : 0);
+    if (S.rawDb && S.rawDb.bulkSet) await S.rawDb.bulkSet(rows);
+    else for (const r of rows) await S.db.doc(r.coll + "/" + r.id).set(r.data);
   });
   restoreData = null;
   if (ok) toast(`Restored ${n} records`); render();
@@ -1019,14 +1020,7 @@ async function runGrouped(ops) {
   if (group.length) { undoStack.push({ label: "Assistant changes", ops: group }); if (undoStack.length > 30) undoStack.shift(); redoStack.length = 0; syncUndoBtn(); }
   return { done, group };
 }
-async function askServer(text, convo, signal) {
-  const { data } = await SB.auth.getSession(); const token = data && data.session && data.session.access_token;
-  if (!token) throw new Error("Please sign in again.");
-  const r = await fetch(`${SUPABASE_URL}/functions/v1/assistant`, { method: "POST", signal, headers: { Authorization: "Bearer " + token, apikey: SUPABASE_ANON_KEY, "content-type": "application/json" }, body: JSON.stringify({ text, convo }) });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || (r.status === 404 ? "The assistant function isn't deployed yet." : "Server error " + r.status));
-  return j;
-}
+const askServer = (text, convo, signal) => api("/api/assistant", { text, convo }, { signal });
 async function aiSend(q) {
   if (AI.busy) return;
   AI.msgs.forEach(m => { if (m.proposal && !m.decided) m.decided = "no"; });
@@ -1085,17 +1079,14 @@ const TG = { links: [], code: null, bot: null, until: 0, spend: null, timer: nul
 async function tgRender(reload = true) {
   const box = $("#tg-card"); if (!box) return;
   if (reload) {
-    const [l, sp] = await Promise.all([
-      SB.from("telegram_links").select("chat_id,username,first_name,linked_at").order("linked_at"),
-      SB.from("ai_spend").select("usd,source").gte("at", new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()),
-    ]);
-    TG.links = l.data || []; TG.spend = (sp.data || []).reduce((a, r) => a + Number(r.usd || 0), 0);
+    try { const j = await api("/api/telegram"); TG.links = j.links || []; TG.spend = Number(j.spendMonth || 0); TG.bot = j.bot || TG.bot; }
+    catch (e) { toast("Couldn't load Telegram: " + e.message); }
   }
   const left = Math.max(0, Math.round((TG.until - Date.now()) / 1000));
   const link = TG.code && TG.bot ? `https://t.me/${TG.bot}?start=${TG.code}` : "";
   box.innerHTML = `<h3>Telegram</h3>
     <p class="muted">Text or send voice notes to your assistant from Telegram. Only chats you link here can use it.</p>
-    ${TG.links.length ? `<ul class="tg-links">${TG.links.map(c => `<li><span><b>${esc(c.first_name || "Telegram chat")}</b>${c.username ? ` @${esc(c.username)}` : ""}<br><span class="muted">linked ${fdate(String(c.linked_at).slice(0, 10))}</span></span>
+    ${TG.links.length ? `<ul class="tg-links">${TG.links.map(c => `<li><span><b>${esc(c.first_name || "Telegram chat")}</b>${c.username ? ` @${esc(c.username)}` : ""}<br><span class="muted">linked ${fdate(iso(new Date(Number(c.linked_at))))}</span></span>
       <button type="button" class="btn small ghost" data-tg="unlink" data-chat="${esc(c.chat_id)}">Disconnect</button></li>`).join("")}</ul>` : '<p class="muted">No chats linked yet.</p>'}
     ${TG.code && left > 0 ? `<div class="tg-code"><span class="num">${esc(TG.code)}</span><span class="muted">valid ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}</span>
       ${link ? `<a class="btn small" href="${esc(link)}" target="_blank" rel="noopener">Open in Telegram</a>` : '<span class="ai-err">The bot isn\'t set up yet. Finish the setup steps first.</span>'}</div>
@@ -1107,16 +1098,14 @@ async function tgRender(reload = true) {
 }
 async function tgAction(what, chat) {
   if (what === "connect") {
-    const { data, error } = await SB.rpc("create_telegram_pairing");
-    if (error) return toast("Couldn't make a code: " + error.message);
-    TG.code = data.code; TG.bot = data.bot; TG.until = Date.now() + 15 * 60000; await tgRender(false);
+    let data; try { data = await api("/api/telegram/pair", {}); } catch (e) { return toast("Couldn't make a code: " + e.message); }
+    TG.code = data.code; TG.bot = data.bot; TG.until = Number(data.expires_at) || Date.now() + 15 * 60000; await tgRender(false);
     if (TG.bot) window.open(`https://t.me/${TG.bot}?start=${TG.code}`, "_blank", "noopener");
   } else if (what === "unlink") {
-    const { error } = await SB.from("telegram_links").delete().eq("chat_id", chat);
-    if (error) return toast("Couldn't disconnect: " + error.message);
+    try { await api("/api/telegram/unlink", { chat_id: Number(chat) }); } catch (e) { return toast("Couldn't disconnect: " + e.message); }
     toast("Disconnected"); tgRender();
   } else if (what === "refresh") tgRender();
-  else if (what === "signout") { await SB.auth.signOut(); location.reload(); }
+  else if (what === "signout") { try { await api("/api/logout", {}); } catch (e) { } location.reload(); }
 }
 
 // ---------------- render ----------------
@@ -1558,23 +1547,18 @@ function showAuth(msg) {
     const email = $("#auth-email").value.trim(), password = $("#auth-pass").value, create = e.submitter && e.submitter.dataset.create;
     if (!email || password.length < 8) { $("#auth-msg").textContent = "Enter your email and a password of at least 8 characters."; return; }
     $("#auth-msg").textContent = create ? "Creating your account..." : "Signing in...";
-    if (create) {
-      const { error } = await SB.auth.signUp({ email, password });
-      if (error) { $("#auth-msg").textContent = /owner|database error/i.test(error.message) ? "This OS already has its owner. Sign in instead." : error.message; return; }
-    }
-    const { error } = await SB.auth.signInWithPassword({ email, password });
-    if (error) { $("#auth-msg").textContent = /confirm/i.test(error.message) ? "Check your email and press the confirmation link, then sign in here." : error.message; return; }
+    try { await api(create ? "/api/signup" : "/api/login", { email, password }); }
+    catch (err) { $("#auth-msg").textContent = err.message; return; }
     location.reload();
   };
 }
 (async () => {
   DL = downloader;
-  const { data } = await SB.auth.getSession();
-  const user = data && data.session && data.session.user;
-  if (!user) { ["goals", "opts", "plans", "biz", "pays", "accts", "bms", "maint", "ms", "decs", "todos", "money", "fixed"].forEach(k => S.ready.add(k)); render(); return showAuth(); }
-  const db = supaDb(SB, user.id);
-  db.ready.catch(e => toast("Couldn't load your data: " + e.message));
-  SB.auth.onAuthStateChange(ev => { if (ev === "SIGNED_OUT") location.reload(); });
+  let me = { signedIn: false, hasOwner: true };
+  try { me = await api("/api/me"); } catch (e) { toast("Couldn't reach the server: " + e.message); }
+  if (!me.signedIn) { ["goals", "opts", "plans", "biz", "pays", "accts", "bms", "maint", "ms", "decs", "todos", "money", "fixed"].forEach(k => S.ready.add(k)); render(); return showAuth(me.hasOwner ? "" : "First time here? Enter your email and a password, then press Create account."); }
+  const db = cfDb({ onSignedOut: () => location.reload() });
+  db.ready.catch(e => { if (e.status !== 401) toast("Couldn't load your data: " + e.message); });
   S.rawDb = db; S.db = wrapDb(db);
   db.doc("app/assistant").onSnapshot(snap => { if (AI.loaded) return; const d = snap.exists ? snap.data() || {} : {};
     AI.notes = d.notes || ""; BRAIN.notes = AI.notes; AI.mode = ["free-first", "free", "haiku"].includes(d.mode) ? d.mode : "free-first"; AI.lastBrief = d.lastBrief || "";

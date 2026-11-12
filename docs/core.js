@@ -1,5 +1,5 @@
 // Personal OS core: data helpers and the assistant's brain.
-// Shared by the web app (index.html) and the Supabase Edge Functions (bundled with esbuild).
+// Shared by the web app (index.html) and the Cloudflare Worker (bundled with esbuild).
 // No browser APIs in here: anything browser-only lives in app.js, and the server swaps in shims.
 const BRAIN = { notes: "" };
 const S = { opts: null, goals: [], plans: [], ms: [], biz: [], pays: [], accts: [], bms: [], maint: [], decs: [], todos: [], money: [], fixed: [], ready: new Set(), db: null, readOnly: false, noDb: false };
