@@ -22,7 +22,7 @@ async function claude(messages: Msg[], source: string): Promise<string> {
     method: "POST",
     headers: { "x-api-key": KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify({
-      model: MODEL, max_tokens: 1000, temperature: 0.2,
+      model: MODEL, max_tokens: 1000,
       system: [
         { type: "text", text: C.brainSystem(), cache_control: { type: "ephemeral" } },
         { type: "text", text: C.brainSnapshot() },
