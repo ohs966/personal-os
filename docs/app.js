@@ -528,7 +528,8 @@ async function doRestore() {
     const rows = [];
     for (const [c] of COLLS) for (const [id, d] of Object.entries(j.collections[c] || {})) rows.push({ coll: c, id, data: d });
     if (j.options && typeof j.options === "object") rows.push({ coll: "app", id: "options", data: { ...j.options } });
-    n = rows.length - (j.options && typeof j.options === "object" ? 1 : 0);
+    if (j.assistant && typeof j.assistant === "object") rows.push({ coll: "app", id: "assistant", data: { ...j.assistant } });
+    n = rows.filter(r => r.coll !== "app").length;
     if (S.rawDb && S.rawDb.bulkSet) await S.rawDb.bulkSet(rows);
     else for (const r of rows) await S.db.doc(r.coll + "/" + r.id).set(r.data);
   });
